@@ -35,6 +35,85 @@ class ProofFixture:
     roots_pem: bytes
 
 
+@dataclass(frozen=True, slots=True)
+class ServerIdentity:
+    certificate_pem: bytes
+    private_key_pem: bytes
+    roots_pem: bytes
+
+
+def make_server_identity(domain: str = "localhost") -> ServerIdentity:
+    root_key = ec.generate_private_key(ec.SECP256R1())
+    root_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "P2C TLS test root")])
+    root = (
+        x509.CertificateBuilder()
+        .subject_name(root_name)
+        .issuer_name(root_name)
+        .public_key(root_key.public_key())
+        .serial_number(100)
+        .not_valid_before(datetime(2020, 1, 1, tzinfo=UTC))
+        .not_valid_after(datetime(2040, 1, 1, tzinfo=UTC))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=1), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=None,
+                decipher_only=None,
+            ),
+            critical=True,
+        )
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(root_key.public_key()), False)
+        .sign(root_key, hashes.SHA256())
+    )
+    leaf_key = ec.generate_private_key(ec.SECP256R1())
+    leaf = (
+        x509.CertificateBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, domain)]))
+        .issuer_name(root_name)
+        .public_key(leaf_key.public_key())
+        .serial_number(101)
+        .not_valid_before(datetime(2025, 1, 1, tzinfo=UTC))
+        .not_valid_after(datetime(2035, 1, 1, tzinfo=UTC))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName(domain)]), critical=False)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=False,
+                crl_sign=False,
+                encipher_only=None,
+                decipher_only=None,
+            ),
+            critical=True,
+        )
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), False)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(leaf_key.public_key()), False)
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(root_key.public_key()), False
+        )
+        .sign(root_key, hashes.SHA256())
+    )
+    return ServerIdentity(
+        certificate_pem=leaf.public_bytes(serialization.Encoding.PEM),
+        private_key_pem=leaf_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ),
+        roots_pem=root.public_bytes(serialization.Encoding.PEM),
+    )
+
+
 def make_valid_proof() -> ProofFixture:
     domain = "example.com"
     txid = "dc9023857775b489145e2169d642928ba0bdf188c3e6ab90699f239f0df6a1f1"

@@ -5,13 +5,18 @@ type 2). This repository intentionally does not link to ConnectCoin Core or
 reuse its P2C parser. The separate implementation and small test suite are
 intended to detect protocol misunderstandings before a proof reaches a node.
 
-This is early development software. It is not yet a TLS proof generator and it
-does not access wallets, private keys, RPC credentials, or the P2P network.
+This is early development software. It can generate and independently verify
+TLS 1.3 P2C proofs, but it does not access wallets, private keys, RPC
+credentials, or the P2P network.
 
 ## Current commands
 
 ```text
 p2c-tools challenge --txid TXID --input-index 0
+p2c-tools generate --domain example.com --txid TXID --input-index 0 \
+  --target TARGET --root-certificates-version 1 \
+  --validation-time UNIX_TIME --roots p2c_roots_v1.pem \
+  --output connection-proof.json
 p2c-tools inspect connection-proof.json
 p2c-tools verify connection-proof.json --roots p2c_roots_v1.pem
 ```
@@ -23,6 +28,20 @@ also checks the work target, certificate path/domain/time, leaf usage, and TLS
 1.3 `CertificateVerify` signature using an independent OpenSSL-backed library.
 The cryptographic provider is pinned so an upgrade cannot silently change
 verification behavior; upgrades require an explicit review and test run.
+
+`generate` opens real TLS 1.3 connections with the claim challenge forced into
+`ClientHello.random`, decrypts the authenticated server handshake, and searches
+until the connection-work target is met. It sends no HTTP request and closes
+after capturing `CertificateVerify`. By default it permits one new connection
+per second with concurrency 1, rejects non-public destination addresses, pins
+DNS results for the run, validates the first usable proof completely, and will
+continue until success or interruption. Set `--connections-per-second -1` for
+unlimited generation or `0` to explicitly disable HTTPS proof generation.
+Use `--overall-timeout` and `--max-attempts` to bound a run.
+
+The development-only switches `--allow-private-addresses` and
+`--allow-unpinned-roots` weaken network and trust-bundle safety checks. They
+should only be used with controlled test servers and test roots.
 
 The JSON envelope asserts the domain, target, transaction ID, input index, and
 validation time under which the proof is being checked. Until RPC/transaction
@@ -61,9 +80,6 @@ tools and is not serialized into a ConnectCoin transaction.
 
 ## Next milestones
 
-1. Capture and decrypt the narrowly supported TLS 1.3 handshake profile while
-   forcing the supplied claim challenge into `ClientHello.random`.
-2. Search connection transcripts until the output work target is met, with
-   configurable rate, concurrency, cancellation, and target safety controls.
-3. Add optional Core RPC orchestration. Wallet integration remains in the Core
+1. Add durable progress/checkpoint reporting for long-running searches.
+2. Add optional Core RPC orchestration. Wallet integration remains in the Core
    repository and the helper will never receive wallet private keys.

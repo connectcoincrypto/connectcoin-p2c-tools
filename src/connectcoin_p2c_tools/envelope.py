@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -113,6 +114,21 @@ class ConnectionProof:
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ProofFormatError(f"cannot read connection proof: {exc}") from exc
         return cls.from_dict(value)
+
+    def write(self, path: str | Path, *, overwrite: bool = False) -> None:
+        destination = Path(path)
+        if destination.exists() and not overwrite:
+            raise ProofFormatError(f"refusing to overwrite existing file: {destination}")
+        temporary = destination.with_name(destination.name + ".tmp")
+        try:
+            temporary.write_text(
+                json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            temporary.replace(destination)
+        except (OSError, UnicodeError) as exc:
+            with suppress(OSError):
+                temporary.unlink(missing_ok=True)
+            raise ProofFormatError(f"cannot write connection proof: {exc}") from exc
 
     def to_dict(self) -> dict[str, object]:
         return {

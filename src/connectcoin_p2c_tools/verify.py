@@ -78,6 +78,13 @@ def _load_roots(path: str | Path, version: int, enforce_root_pin: bool) -> list[
     return roots
 
 
+def validate_root_bundle(
+    roots_path: str | Path, root_certificates_version: int, *, enforce_root_pin: bool = True
+) -> None:
+    """Validate a root bundle before a potentially long proof search."""
+    _load_roots(roots_path, root_certificates_version, enforce_root_pin)
+
+
 def _check_supplied_certificate_times(
     certificates: list[x509.Certificate], validation_time: int
 ) -> None:
