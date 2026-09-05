@@ -1,0 +1,7 @@
+{
+  "description": "Generated with ConnectCoin Core getp2cchallenge",
+  "raw_transaction": "02000000010000000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0000000000",
+  "txid": "dc9023857775b489145e2169d642928ba0bdf188c3e6ab90699f239f0df6a1f1",
+  "input_index": 0,
+  "clienthello_random": "00a5b6140404ff1e4ceeb8ba3bee84dda4908938959da4d05feae4a8b6ad62c0"
+}

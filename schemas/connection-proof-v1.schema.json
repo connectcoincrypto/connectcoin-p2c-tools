@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://connectcoin.org/schemas/connection-proof-v1.schema.json",
+  "title": "ConnectCoin P2C connection proof envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "domain",
+    "txid",
+    "input_index",
+    "connection_work_target",
+    "root_certificates_version",
+    "validation_time",
+    "proof"
+  ],
+  "properties": {
+    "format": {"const": "connectcoin-p2c-proof"},
+    "version": {"const": 1},
+    "domain": {"type": "string", "minLength": 1, "maxLength": 253},
+    "txid": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "input_index": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+    "connection_work_target": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "root_certificates_version": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+    "validation_time": {"type": "integer", "minimum": 1},
+    "proof": {"type": "string", "pattern": "^[0-9a-f]+$", "maxLength": 131072}
+  }
+}
