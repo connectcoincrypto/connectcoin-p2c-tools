@@ -13,10 +13,7 @@ credentials, or the P2P network.
 
 ```text
 p2c-tools challenge --txid TXID --input-index 0
-p2c-tools generate --domain example.com --txid TXID --input-index 0 \
-  --target TARGET --root-certificates-version 1 \
-  --validation-time UNIX_TIME --roots p2c_roots_v1.pem \
-  --output connection-proof.json
+p2c-tools generate --domain example.com --txid TXID --input-index 0 --target TARGET --root-certificates-version 1 --validation-time UNIX_TIME --roots p2c_roots_v1.pem --output connection-proof.json
 p2c-tools inspect connection-proof.json
 p2c-tools verify connection-proof.json --roots p2c_roots_v1.pem
 ```
