@@ -7,7 +7,7 @@ from .domain import is_canonical_domain
 from .errors import ProofFormatError
 from .hashes import connection_work_hash
 
-PROOF_VERSION = 1
+PROOF_VERSION = 2
 MAX_PROOF_SIZE = 64 * 1024
 MAX_CERTIFICATE_MESSAGE_SIZE = 48 * 1024
 MAX_CERTIFICATES = 8
@@ -198,7 +198,7 @@ def _parse_client_hello(body: bytes, domain: str, challenge: bytes) -> _ClientSt
         EXT_ENCRYPTED_CLIENT_HELLO,
     }
     if forbidden.intersection(extensions):
-        raise ProofFormatError("ClientHello contains an extension forbidden by P2C v1")
+        raise ProofFormatError("ClientHello contains an extension forbidden by P2C v2")
 
     versions_reader = _Reader(extensions[EXT_SUPPORTED_VERSIONS])
     versions_size = versions_reader.u8("supported_versions length")
@@ -252,7 +252,7 @@ def _parse_server_hello(body: bytes, client: _ClientState) -> None:
         raise ProofFormatError("ServerHello legacy version must be TLS 1.2")
     random = reader.read(32, "ServerHello.random")
     if random == HELLO_RETRY_REQUEST_RANDOM:
-        raise ProofFormatError("HelloRetryRequest is forbidden in P2C v1")
+        raise ProofFormatError("HelloRetryRequest is forbidden in P2C v2")
     session_size = reader.u8("ServerHello session id length")
     if session_size > 32:
         raise ProofFormatError("ServerHello session id exceeds 32 bytes")
@@ -260,7 +260,7 @@ def _parse_server_hello(body: bytes, client: _ClientState) -> None:
         raise ProofFormatError("ServerHello session id does not match ClientHello")
     cipher_suite = reader.u16("ServerHello cipher suite")
     if cipher_suite not in {TLS_AES_128_GCM_SHA256, TLS_CHACHA20_POLY1305_SHA256}:
-        raise ProofFormatError("P2C v1 requires a SHA-256 TLS 1.3 cipher suite")
+        raise ProofFormatError("P2C v2 requires a SHA-256 TLS 1.3 cipher suite")
     if cipher_suite not in client.cipher_suites:
         raise ProofFormatError("ServerHello selected an unoffered cipher suite")
     if reader.u8("ServerHello compression method") != 0:
@@ -292,7 +292,7 @@ def _parse_encrypted_extensions(body: bytes) -> None:
     if not reader.empty:
         raise ProofFormatError("trailing bytes in EncryptedExtensions")
     if EXT_EARLY_DATA in extensions:
-        raise ProofFormatError("TLS early_data is forbidden in P2C v1")
+        raise ProofFormatError("TLS early_data is forbidden in P2C v2")
 
 
 def _parse_certificate(body: bytes) -> tuple[bytes, ...]:
@@ -367,7 +367,7 @@ def parse_proof(encoded: bytes, expected_domain: str, expected_challenge: bytes)
     transcript_hash = hashlib.sha256(
         client_full + server_full + encrypted_full + certificate_full
     ).digest()
-    messages = (client_full, server_full, encrypted_full, certificate_full, verify_full)
+    work_messages = (client_full, server_full, encrypted_full, certificate_full)
     return ParsedProof(
         client_hello=client_full,
         server_hello=server_full,
@@ -378,5 +378,5 @@ def parse_proof(encoded: bytes, expected_domain: str, expected_challenge: bytes)
         certificate_verify_scheme=scheme,
         certificate_verify_signature=signature,
         transcript_hash=transcript_hash,
-        connection_work_hash=connection_work_hash(messages),
+        connection_work_hash=connection_work_hash(work_messages),
     )

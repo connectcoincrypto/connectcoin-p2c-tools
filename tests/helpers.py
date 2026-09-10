@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from connectcoin_p2c_tools.envelope import ConnectionProof
@@ -42,7 +42,7 @@ class ServerIdentity:
     roots_pem: bytes
 
 
-def make_server_identity(domain: str = "localhost") -> ServerIdentity:
+def make_server_identity(domain: str = "localhost", *, rsa_leaf: bool = False) -> ServerIdentity:
     root_key = ec.generate_private_key(ec.SECP256R1())
     root_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "P2C TLS test root")])
     root = (
@@ -71,7 +71,11 @@ def make_server_identity(domain: str = "localhost") -> ServerIdentity:
         .add_extension(x509.SubjectKeyIdentifier.from_public_key(root_key.public_key()), False)
         .sign(root_key, hashes.SHA256())
     )
-    leaf_key = ec.generate_private_key(ec.SECP256R1())
+    leaf_key = (
+        rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        if rsa_leaf
+        else ec.generate_private_key(ec.SECP256R1())
+    )
     leaf = (
         x509.CertificateBuilder()
         .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, domain)]))
@@ -114,7 +118,9 @@ def make_server_identity(domain: str = "localhost") -> ServerIdentity:
     )
 
 
-def make_valid_proof() -> ProofFixture:
+def make_valid_proof(
+    *, signature_algorithms: tuple[int, ...] = (0x0403,), signature_algorithms_mask: int = 1
+) -> ProofFixture:
     domain = "example.com"
     txid = "dc9023857775b489145e2169d642928ba0bdf188c3e6ab90699f239f0df6a1f1"
     challenge = claim_challenge(txid, 0)
@@ -192,7 +198,11 @@ def make_valid_proof() -> ProofFixture:
         (
             _extension(0, _u16(len(sni_name)) + sni_name),
             _extension(43, b"\x02\x03\x04"),
-            _extension(13, b"\x00\x02\x04\x03"),
+            _extension(
+                13,
+                _u16(len(signature_algorithms) * 2)
+                + b"".join(_u16(scheme) for scheme in signature_algorithms),
+            ),
             _extension(51, _u16(36) + b"\x00\x1d\x00\x20" + b"\x01" * 32),
         )
     )
@@ -229,7 +239,7 @@ def make_valid_proof() -> ProofFixture:
     signed = b"\x20" * 64 + b"TLS 1.3, server CertificateVerify\x00" + transcript_hash
     signature = leaf_key.sign(signed, ec.ECDSA(hashes.SHA256()))
     certificate_verify = _handshake(15, b"\x04\x03" + _u16(len(signature)) + signature)
-    proof = b"\x01" + b"".join(
+    proof = b"\x02" + b"".join(
         (client_hello, server_hello, encrypted_extensions, certificate, certificate_verify)
     )
     envelope = ConnectionProof(
@@ -238,6 +248,7 @@ def make_valid_proof() -> ProofFixture:
         input_index=0,
         connection_work_target="f" * 64,
         root_certificates_version=1,
+        signature_algorithms_mask=signature_algorithms_mask,
         validation_time=1_800_000_000,
         proof=proof,
     )

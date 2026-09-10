@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 
 CLAIM_TAG = b"ConnectCoin/P2C/claim/v1"
-WORK_TAG = b"ConnectCoin/P2C/work/v1"
+WORK_TAG = b"ConnectCoin/P2C/work/v2"
 
 
 def tagged_hash(tag: bytes, message: bytes) -> bytes:
@@ -44,7 +44,14 @@ def claim_challenge(txid: str, input_index: int) -> bytes:
     return tagged_hash(CLAIM_TAG, internal_txid + input_index.to_bytes(4, "little"))
 
 
-def connection_work_hash(messages: tuple[bytes, bytes, bytes, bytes, bytes]) -> bytes:
+def connection_work_hash(messages: tuple[bytes, bytes, bytes, bytes]) -> bytes:
+    """Hash full CH, SH, EE and Certificate messages, including handshake headers.
+
+    The proof version byte and the entire CertificateVerify message are excluded.
+    CertificateVerify must still be parsed and authenticated separately.
+    """
+    if len(messages) != 4:
+        raise ValueError("P2C v2 work requires exactly four messages, excluding CertificateVerify")
     return tagged_hash(WORK_TAG, b"".join(messages))
 
 

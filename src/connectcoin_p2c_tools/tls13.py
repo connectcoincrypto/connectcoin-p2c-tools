@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import math
 import secrets
 import socket
 import time
@@ -18,14 +19,18 @@ from .errors import P2CError
 from .protocol import (
     CERTIFICATE,
     CERTIFICATE_VERIFY,
-    ECDSA_SECP256R1_SHA256,
     ENCRYPTED_EXTENSIONS,
     HELLO_RETRY_REQUEST_RANDOM,
-    RSA_PSS_PSS_SHA256,
-    RSA_PSS_RSAE_SHA256,
+    PROOF_VERSION,
     SERVER_HELLO,
     TLS_AES_128_GCM_SHA256,
     TLS_CHACHA20_POLY1305_SHA256,
+    parse_proof,
+)
+from .signatures import (
+    accepted_signature_algorithms,
+    signature_scheme_allowed,
+    validate_signature_algorithms_mask,
 )
 
 CONTENT_CHANGE_CIPHER_SPEC = 20
@@ -70,7 +75,7 @@ class TLSProofMessages:
 
     @property
     def encoded_proof(self) -> bytes:
-        return b"\x01" + b"".join(
+        return bytes([PROOF_VERSION]) + b"".join(
             (
                 self.client_hello,
                 self.server_hello,
@@ -98,8 +103,14 @@ def _record(content_type: int, body: bytes, legacy_version: int = 0x0301) -> byt
 
 
 def build_client_hello(
-    domain: str, challenge: bytes, public_key: bytes, session_id: bytes
+    domain: str,
+    challenge: bytes,
+    public_key: bytes,
+    session_id: bytes,
+    *,
+    signature_algorithms_mask: int,
 ) -> bytes:
+    validate_signature_algorithms_mask(signature_algorithms_mask)
     if not is_canonical_domain(domain):
         raise TLSGenerationError("domain is not canonical lower-case ASCII DNS form")
     if len(challenge) != 32:
@@ -112,13 +123,11 @@ def build_client_hello(
     encoded_domain = domain.encode("ascii")
     server_name = b"\x00" + _u16(len(encoded_domain)) + encoded_domain
     signature_schemes = b"".join(
-        _u16(value)
-        for value in (
-            ECDSA_SECP256R1_SHA256,
-            RSA_PSS_RSAE_SHA256,
-            RSA_PSS_PSS_SHA256,
-        )
+        _u16(algorithm.scheme)
+        for algorithm in accepted_signature_algorithms(signature_algorithms_mask)
     )
+    # The output mask constrains CertificateVerify, not signatures made by
+    # certificate issuers. Keep that separate TLS extension independent.
     certificate_signature_schemes = b"".join(
         _u16(value)
         for value in (
@@ -286,7 +295,7 @@ def parse_server_hello(message: bytes, expected_session_id: bytes) -> tuple[int,
     if len(body) < 38 or body[:2] != _u16(TLS_1_2):
         raise TLSGenerationError("invalid TLS 1.3 ServerHello")
     if body[2:34] == HELLO_RETRY_REQUEST_RANDOM:
-        raise TLSGenerationError("HelloRetryRequest is not supported by P2C v1")
+        raise TLSGenerationError("HelloRetryRequest is not supported by P2C v2")
     position = 34
     session_size = body[position]
     position += 1
@@ -357,16 +366,24 @@ def capture_tls13_proof(
     domain: str,
     challenge: bytes,
     *,
+    signature_algorithms_mask: int,
     timeout: float = 10.0,
 ) -> TLSProofMessages:
-    if timeout <= 0:
-        raise TLSGenerationError("connection timeout must be positive")
+    validate_signature_algorithms_mask(signature_algorithms_mask)
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise TLSGenerationError("connection timeout must be finite and positive")
     private_key = x25519.X25519PrivateKey.generate()
     public_key = private_key.public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw
     )
     session_id = secrets.token_bytes(32)
-    client_hello = build_client_hello(domain, challenge, public_key, session_id)
+    client_hello = build_client_hello(
+        domain,
+        challenge,
+        public_key,
+        session_id,
+        signature_algorithms_mask=signature_algorithms_mask,
+    )
     deadline = time.monotonic() + timeout
 
     with socket.socket(endpoint.family, endpoint.socket_type, endpoint.protocol) as connection:
@@ -436,7 +453,7 @@ def capture_tls13_proof(
                     )
                 captured.append(message)
 
-    return TLSProofMessages(
+    result = TLSProofMessages(
         client_hello=client_hello,
         server_hello=server_hello,
         encrypted_extensions=captured[0],
@@ -444,3 +461,10 @@ def capture_tls13_proof(
         certificate_verify=captured[2],
         peer_ip=endpoint.ip,
     )
+    # Retain all five messages in the v2 proof, while the parser computes work
+    # from only the first four. The caller still must verify the certificate
+    # chain and CertificateVerify signature before accepting a claim.
+    parsed = parse_proof(result.encoded_proof, domain, challenge)
+    if not signature_scheme_allowed(signature_algorithms_mask, parsed.certificate_verify_scheme):
+        raise TLSGenerationError("TLS server used a disallowed P2C signature scheme")
+    return result

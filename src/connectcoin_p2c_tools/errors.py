@@ -3,7 +3,7 @@ class P2CError(ValueError):
 
 
 class ProofFormatError(P2CError):
-    """A binary proof does not use the canonical P2C v1 encoding."""
+    """A proof or its context does not use the canonical P2C v2 encoding."""
 
 
 class ProofVerificationError(P2CError):

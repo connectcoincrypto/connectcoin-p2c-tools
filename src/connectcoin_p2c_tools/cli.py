@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
-from .envelope import ConnectionProof
+from .envelope import ENVELOPE_VERSION, ConnectionProof
 from .errors import P2CError
 from .generator import (
     GenerationOptions,
@@ -17,6 +17,7 @@ from .generator import (
 )
 from .hashes import claim_challenge, internal_hash_to_display, meets_work_target
 from .protocol import parse_proof
+from .signatures import accepted_signature_algorithms, signature_scheme_allowed
 from .verify import verify_connection_proof
 
 
@@ -41,6 +42,7 @@ def _inspect(args: argparse.Namespace) -> None:
     _json(
         {
             "valid_structure": True,
+            "proof_version": 2,
             "domain": envelope.domain,
             "txid": envelope.txid,
             "input_index": envelope.input_index,
@@ -52,6 +54,16 @@ def _inspect(args: argparse.Namespace) -> None:
             ),
             "certificate_count": len(parsed.certificate_chain),
             "certificate_verify_scheme": f"0x{parsed.certificate_verify_scheme:04x}",
+            "signature_algorithms_mask": envelope.signature_algorithms_mask,
+            "accepted_signature_algorithms": [
+                {"name": algorithm.name, "scheme": f"0x{algorithm.scheme:04x}"}
+                for algorithm in accepted_signature_algorithms(envelope.signature_algorithms_mask)
+            ],
+            "signature_scheme_allowed": signature_scheme_allowed(
+                envelope.signature_algorithms_mask, parsed.certificate_verify_scheme
+            ),
+            "cryptographic_verification_performed": False,
+            "blockchain_context_verified": False,
             "message_sizes": {
                 "client_hello": len(parsed.client_hello),
                 "server_hello": len(parsed.server_hello),
@@ -69,6 +81,8 @@ def _verify(args: argparse.Namespace) -> None:
     result = verify_connection_proof(envelope, args.roots)
     output = asdict(result)
     output["valid"] = True
+    output["proof_version"] = 2
+    output["blockchain_context_verified"] = False
     output["certificate_verify_scheme"] = f"0x{result.certificate_verify_scheme:04x}"
     _json(output)
 
@@ -95,16 +109,17 @@ class _ProgressPrinter:
 def _generate(args: argparse.Namespace) -> None:
     serialized_context = {
         "format": "connectcoin-p2c-proof",
-        "version": 1,
+        "version": ENVELOPE_VERSION,
         "domain": args.domain,
         "txid": args.txid,
         "input_index": args.input_index,
         "connection_work_target": args.target,
         "root_certificates_version": args.root_certificates_version,
+        "signature_algorithms_mask": args.signature_algorithms_mask,
         "validation_time": args.validation_time,
         # A one-byte placeholder lets the envelope parser validate all
         # generation context without accepting an empty serialized proof.
-        "proof": "01",
+        "proof": "02",
     }
     context = replace(ConnectionProof.from_dict(serialized_context), proof=b"")
     options = GenerationOptions(
@@ -167,6 +182,13 @@ def _parser() -> argparse.ArgumentParser:
     generate.add_argument("--input-index", required=True, type=int)
     generate.add_argument("--target", required=True, help="display-form connection work target")
     generate.add_argument("--root-certificates-version", type=int, default=1)
+    generate.add_argument(
+        "--signature-algorithms-mask",
+        required=True,
+        type=int,
+        choices=range(1, 8),
+        help="exact output mask: 1=ECDSA P-256, 2=RSA-PSS-RSAE, 4=RSA-PSS-PSS; combine bits",
+    )
     generate.add_argument(
         "--validation-time", required=True, type=int, help="trusted ConnectCoin tip/block MTP"
     )

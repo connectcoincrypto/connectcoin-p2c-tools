@@ -14,6 +14,7 @@ from .envelope import ConnectionProof
 from .errors import P2CError, ProofFormatError, ProofVerificationError
 from .hashes import internal_hash_to_display, meets_work_target
 from .protocol import parse_proof
+from .signatures import validate_signature_algorithms_mask
 from .tls13 import Endpoint, TLSGenerationError, TLSProofMessages, capture_tls13_proof
 from .verify import validate_root_bundle, verify_connection_proof
 
@@ -118,6 +119,7 @@ def _capture(
         endpoint,
         envelope.domain,
         envelope.challenge,
+        signature_algorithms_mask=envelope.signature_algorithms_mask,
         timeout=connection_timeout,
     )
 
@@ -132,6 +134,9 @@ def generate_connection_proof(
     if options is None:
         options = GenerationOptions()
     _validate_options(options)
+    validate_signature_algorithms_mask(context.signature_algorithms_mask)
+    if type(context.version) is not int or context.version != 2:
+        raise GenerationError("only connection proof envelope version 2 is supported")
     if context.proof:
         raise GenerationError("generation context must have an empty proof field")
     try:

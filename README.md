@@ -9,22 +9,89 @@ This is early development software. It can generate and independently verify
 TLS 1.3 P2C proofs, but it does not access wallets, private keys, RPC
 credentials, or the P2P network.
 
+## Protocol compatibility
+
+Version **0.3.0** supports **P2C proof v2 only**, including the mandatory
+per-output `signature_algorithms_mask` introduced by Core's signature-mask
+test-network reset. The implementation was checked against ConnectCoin Core
+[`994835a402665ddf687348d394bc9ba6c446b1de`](https://github.com/connectcoincrypto/connectcoin/commit/994835a402665ddf687348d394bc9ba6c446b1de),
+including protocol changes in `6f86ce2727` and `d4d1ae56aa`.
+
+Old binary v1 proofs and JSON envelope v1 are rejected. Obtain fresh claim
+context from the updated node and regenerate proofs; do not just relabel an
+old file. There is no default or fallback signature mask. This standalone tool
+does not maintain network/genesis metadata, peers, a wallet, or a chain index:
+make sure the node supplying the claim context is on the intended current chain.
+
+The consensus witness is byte `02` followed by five complete TLS handshake
+messages: ClientHello, ServerHello, EncryptedExtensions, Certificate, and
+CertificateVerify. The v2 work hash is:
+
+```text
+TaggedHash("ConnectCoin/P2C/work/v2", ClientHello || ServerHello || EncryptedExtensions || Certificate)
+```
+
+All four handshake headers are included. The proof version byte and **all** of
+CertificateVerify (header, scheme, signature length, and signature) are excluded
+from work. CertificateVerify is still mandatory and its signature is verified.
+The ordinary TLS transcript hash covers the same four messages. Work hashes
+use Core's uint256 display order; transcript hashes use TLS digest order.
+
+The claim challenge tag remains `ConnectCoin/P2C/claim/v1`; that tag is unrelated
+to the proof version. Immutable root bundle version 1 also remains unchanged.
+
+### Output signature policy
+
+The mask is an integer from 1 to 7, combining these bits:
+
+| Bit | TLS SignatureScheme | Name |
+| --- | --- | --- |
+| 1 | `0x0403` | `ecdsa_secp256r1_sha256` |
+| 2 | `0x0804` | `rsa_pss_rsae_sha256` |
+| 4 | `0x0809` | `rsa_pss_pss_sha256` |
+
+For example, mask 6 permits both RSA-PSS schemes but not ECDSA; mask 7 permits
+all three. Use the actual output's mask, not whichever value permits a proof
+you already have. Generation offers exactly that mask in ClientHello's
+`signature_algorithms`. `signature_algorithms_cert` remains a separate offer
+for certificate issuer signatures. Verification checks the selected
+CertificateVerify scheme against the output mask, not every ClientHello offer.
+
+ECDSA requires a P-256 leaf key. RSA-PSS requires at least 2048 bits, SHA-256,
+MGF1-SHA-256, and a 32-byte signature salt. RSAE and PSS leaf SPKI encodings are
+distinguished; restricted PSS keys must permit those parameters.
+
 ## Current commands
 
 ```text
 p2c-tools challenge --txid TXID --input-index 0
-p2c-tools generate --domain example.com --txid TXID --input-index 0 --target TARGET --root-certificates-version 1 --validation-time UNIX_TIME --roots p2c_roots_v1.pem --output connection-proof.json
+p2c-tools generate --domain example.com --txid TXID --input-index 0 --target TARGET --root-certificates-version 1 --signature-algorithms-mask MASK --validation-time UNIX_TIME --roots p2c_roots_v1.pem --output connection-proof.json
 p2c-tools inspect connection-proof.json
 p2c-tools verify connection-proof.json --roots p2c_roots_v1.pem
 ```
 
 `challenge` calculates the exact 32 bytes for `ClientHello.random` from the
 display-form transaction ID and input index. `inspect` performs complete P2C
-v1 structural parsing and reports the transcript and work hashes. `verify`
+v2 structural parsing and reports the transcript/work hashes, accepted
+signature algorithms, and whether the selected scheme is allowed. It does
+**not** authenticate the certificates or TLS signature. `verify`
 also checks the work target, certificate path/domain/time, leaf usage, and TLS
 1.3 `CertificateVerify` signature using an independent OpenSSL-backed library.
 The cryptographic provider is pinned so an upgrade cannot silently change
 verification behavior; upgrades require an explicit review and test run.
+
+`--signature-algorithms-mask` is required for generation; replace `MASK` with
+the on-chain value. The other uppercase placeholders must also be replaced
+with trusted claim data. CLI inspection/verification reports
+`blockchain_context_verified: false`: even a cryptographically valid proof is
+not evidence that the asserted output exists, is unspent, or will be accepted
+by a node. The independent OpenSSL-backed X.509 policy is not a replacement
+for Core's consensus implementation; submit through Core for authoritative
+validation.
+For example, the pinned provider rejects an explicitly encoded DEFAULT
+`saltLength=20` in PSS parameters, whereas Core's parser may accept that encoding.
+The stricter DER policy can therefore reject some certificates independently
+of their mathematical signature validity.
 
 `generate` opens real TLS 1.3 connections with the claim challenge forced into
 `ClientHello.random`, decrypts the authenticated server handshake, and searches
@@ -35,16 +102,29 @@ DNS results for the run, validates the first usable proof completely, and will
 continue until success or interruption. Set `--connections-per-second -1` for
 unlimited generation or `0` to explicitly disable HTTPS proof generation.
 Use `--overall-timeout` and `--max-attempts` to bound a run.
+Concurrency remains opt-in (default 1, maximum 256) in this standalone tool;
+changes to Core's automatic-claim worker defaults do not raise these limits.
 
 The development-only switches `--allow-private-addresses` and
 `--allow-unpinned-roots` weaken network and trust-bundle safety checks. They
 should only be used with controlled test servers and test roots.
 
-The JSON envelope asserts the domain, target, transaction ID, input index, and
-validation time under which the proof is being checked. Until RPC/transaction
+The JSON envelope asserts the domain, target, output signature mask,
+transaction ID, input index, and validation time under which the proof is
+being checked. Until RPC/transaction
 lookup is implemented, the caller must obtain those values from a trusted
 ConnectCoin node and must not treat an untrusted envelope as proof of its own
 blockchain context.
+
+An updated Core wallet's `preparep2cclaim` RPC returns `txid`, `input_index`,
+`clienthello_random`, `domain`, `connection_work_target`,
+`root_certificates_version`, `signature_algorithms_mask`, and `validation_time`.
+Use the prepared **spending/claim transaction's txid**, not the funding txid;
+the challenge binds its final non-witness transaction and input index. Keep
+the prepared transaction, destination, and fees unchanged during generation.
+Use the chain's median time past, not the local clock. Core rechecks time,
+proof validity, and bounty availability when submitting; generation here
+never submits or broadcasts anything automatically.
 
 The trusted root file must correspond to `root_certificates_version` in the
 proof envelope. Root bundle version 1 is hash-pinned to the same Mozilla bundle
@@ -62,18 +142,40 @@ p2c-tools verify connection-proof.json --roots ../connectcoin/src/consensus/p2c_
 
 ## Development
 
+Ubuntu (Python 3.11 or newer):
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e ".[dev]"
+.venv/bin/python -m pytest
+.venv/bin/python -m ruff check .
+.venv/bin/python -m ruff format --check .
+.venv/bin/python -m mypy
+```
+
+Windows PowerShell:
+
 ```powershell
 py -m venv .venv
 ./.venv/Scripts/python.exe -m pip install -e ".[dev]"
 ./.venv/Scripts/python.exe -m pytest
 ./.venv/Scripts/python.exe -m ruff check .
+./.venv/Scripts/python.exe -m ruff format --check .
 ./.venv/Scripts/python.exe -m mypy
 ```
 
 The JSON envelope is described by
-`schemas/connection-proof-v1.schema.json`. The consensus witness is still only
+`schemas/connection-proof-v2.schema.json`. Its `version` is 2 and
+`signature_algorithms_mask` is mandatory, including when calling the Python
+`ConnectionProof` constructor directly. The consensus witness is still only
 the binary `proof` field; the surrounding JSON is an interchange format for
 tools and is not serialized into a ConnectCoin transaction.
+
+Tests are offline, apart from controlled loopback TLS servers. They cover all
+seven masks, v1 rejection, v2 work vectors, CertificateVerify independence
+from work, actual TLS signature verification, and generator negotiation.
+`vectors/challenge-v1.json` remains valid because the claim tag is unchanged;
+`vectors/work-v2.json` is a synthetic structural vector, not a trusted TLS proof.
 
 ## Next milestones
 
