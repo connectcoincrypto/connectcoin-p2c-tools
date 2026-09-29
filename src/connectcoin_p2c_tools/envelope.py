@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -151,18 +153,43 @@ class ConnectionProof:
 
     def write(self, path: str | Path, *, overwrite: bool = False) -> None:
         destination = Path(path)
-        if destination.exists() and not overwrite:
-            raise ProofFormatError(f"refusing to overwrite existing file: {destination}")
-        temporary = destination.with_name(destination.name + ".tmp")
+        # Validate before creating anything, then write through the exclusively
+        # created handle. Never open a predictable sibling such as proof.json.tmp.
+        serialized = json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n"
+        temporary: Path | None = None
         try:
-            temporary.write_text(
-                json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
-            )
-            temporary.replace(destination)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                newline="\n",
+                dir=destination.parent,
+                prefix=".p2c-proof-",
+                suffix=".tmp",
+                delete=False,
+            ) as stream:
+                temporary = Path(stream.name)
+                stream.write(serialized)
+                stream.flush()
+                os.fsync(stream.fileno())
+            # Close first for Windows. Same-directory staging keeps publication
+            # on one filesystem. A hard link publishes the complete file only
+            # if the destination is absent, without an exists()/replace() race.
+            if overwrite:
+                os.replace(temporary, destination)
+                temporary = None  # The staging name no longer belongs to us.
+            else:
+                try:
+                    os.link(temporary, destination)
+                except FileExistsError as exc:
+                    raise ProofFormatError(
+                        f"refusing to overwrite existing file: {destination}"
+                    ) from exc
         except (OSError, UnicodeError) as exc:
-            with suppress(OSError):
-                temporary.unlink(missing_ok=True)
             raise ProofFormatError(f"cannot write connection proof: {exc}") from exc
+        finally:
+            if temporary is not None:
+                with suppress(OSError):
+                    temporary.unlink(missing_ok=True)
 
     def to_dict(self) -> dict[str, object]:
         self._check_serialized_proof()

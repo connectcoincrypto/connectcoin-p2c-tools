@@ -111,6 +111,16 @@ Use `--overall-timeout` and `--max-attempts` to bound a run.
 Concurrency remains opt-in (default 1, maximum 256) in this standalone tool;
 changes to Core's automatic-claim worker defaults do not raise these limits.
 
+Proof files are staged in exclusively created, randomly named temporary files
+in the output directory, then published only after the complete write is closed.
+Without `--overwrite`, publication atomically refuses an existing destination,
+including a symbolic link or a file created by another writer during generation.
+This mode requires filesystem hard-link support (for example, NTFS, APFS or
+ext4); unsupported filesystems fail rather than falling back to a racy overwrite.
+With `--overwrite`, the completed file replaces the destination entry atomically,
+not the contents of a file reached through a destination link. Use an output
+directory you control; preexisting `OUTPUT.tmp` files are never reused or removed.
+
 The development-only switches `--allow-private-addresses` and
 `--allow-unpinned-roots` weaken network and trust-bundle safety checks. They
 should only be used with controlled test servers and test roots.
