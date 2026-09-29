@@ -122,9 +122,6 @@ def make_valid_proof(
     *, signature_algorithms: tuple[int, ...] = (0x0403,), signature_algorithms_mask: int = 1
 ) -> ProofFixture:
     domain = "example.com"
-    txid = "dc9023857775b489145e2169d642928ba0bdf188c3e6ab90699f239f0df6a1f1"
-    challenge = claim_challenge(txid, 0)
-
     root_key = ec.generate_private_key(ec.SECP256R1())
     root_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "P2C test root")])
     root = (
@@ -191,7 +188,28 @@ def make_valid_proof(
         )
         .sign(root_key, hashes.SHA256())
     )
-    leaf_der = leaf.public_bytes(serialization.Encoding.DER)
+    return make_proof_from_chain(
+        domain=domain,
+        leaf_key=leaf_key,
+        certificates=[leaf],
+        roots=[root],
+        signature_algorithms=signature_algorithms,
+        signature_algorithms_mask=signature_algorithms_mask,
+    )
+
+
+def make_proof_from_chain(
+    *,
+    domain: str,
+    leaf_key: ec.EllipticCurvePrivateKey,
+    certificates: list[x509.Certificate],
+    roots: list[x509.Certificate],
+    signature_algorithms: tuple[int, ...] = (0x0403,),
+    signature_algorithms_mask: int = 1,
+) -> ProofFixture:
+    """Sign a complete offline proof, preserving supplied certificate order/copies."""
+    txid = "dc9023857775b489145e2169d642928ba0bdf188c3e6ab90699f239f0df6a1f1"
+    challenge = claim_challenge(txid, 0)
 
     sni_name = b"\x00" + _u16(len(domain)) + domain.encode("ascii")
     client_extensions = b"".join(
@@ -231,7 +249,10 @@ def make_valid_proof(
     )
     server_hello = _handshake(2, server_body)
     encrypted_extensions = _handshake(8, b"\x00\x00")
-    certificate_entry = _u24(len(leaf_der)) + leaf_der + b"\x00\x00"
+    certificate_entry = b""
+    for supplied in certificates:
+        encoded = supplied.public_bytes(serialization.Encoding.DER)
+        certificate_entry += _u24(len(encoded)) + encoded + b"\x00\x00"
     certificate = _handshake(11, b"\x00" + _u24(len(certificate_entry)) + certificate_entry)
     transcript_hash = hashlib.sha256(
         client_hello + server_hello + encrypted_extensions + certificate
@@ -254,5 +275,5 @@ def make_valid_proof(
     )
     return ProofFixture(
         envelope=envelope,
-        roots_pem=root.public_bytes(serialization.Encoding.PEM),
+        roots_pem=b"".join(root.public_bytes(serialization.Encoding.PEM) for root in roots),
     )

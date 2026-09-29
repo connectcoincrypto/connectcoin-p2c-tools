@@ -79,6 +79,12 @@ also checks the work target, certificate path/domain/time, leaf usage, and TLS
 1.3 `CertificateVerify` signature using an independent OpenSSL-backed library.
 The cryptographic provider is pinned so an upgrade cannot silently change
 verification behavior; upgrades require an explicit review and test run.
+The current pin is `cryptography==50.0.1`, including the fixes for duplicate
+certificate path growth ([GHSA-jwv3-5hgf-82ww](https://github.com/pyca/cryptography/security/advisories/GHSA-jwv3-5hgf-82ww))
+and wildcard DNS name-constraint bypass ([GHSA-m2h6-j472-rp4c](https://github.com/pyca/cryptography/security/advisories/GHSA-m2h6-j472-rp4c)).
+Its official binary wheels include OpenSSL 4.0.2; source builds use their linked
+OpenSSL. Existing installations must reinstall the project to receive the
+updated provider. The proof format and immutable root bundle are unchanged.
 
 `--signature-algorithms-mask` is required for generation; replace `MASK` with
 the on-chain value. The other uppercase placeholders must also be replaced
@@ -174,6 +180,10 @@ tools and is not serialized into a ConnectCoin transaction.
 Tests are offline, apart from controlled loopback TLS servers. They cover all
 seven masks, v1 rejection, v2 work vectors, CertificateVerify independence
 from work, actual TLS signature verification, and generator negotiation.
+Security regressions verify complete signed proofs with local test CAs:
+constrained DNS wildcards and duplicate certificate chains at the eight-certificate
+limit. The duplicate-chain rejection runs in a subprocess with a five-second
+deadline so a path-building regression cannot stall the suite.
 `vectors/challenge-v1.json` remains valid because the claim tag is unchanged;
 `vectors/work-v2.json` is a synthetic structural vector, not a trusted TLS proof.
 
