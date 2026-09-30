@@ -61,6 +61,15 @@ ECDSA requires a P-256 leaf key. RSA-PSS requires at least 2048 bits, SHA-256,
 MGF1-SHA-256, and a 32-byte signature salt. RSAE and PSS leaf SPKI encodings are
 distinguished; restricted PSS keys must permit those parameters.
 
+Every RSA public key in supplied certificates and trusted roots, including
+RSAE, RSA-PSS, intermediates and unused chain entries, must have a public
+exponent of at most **64 bits** (`e <= 2^64 - 1`), independently of modulus size.
+Verification rejects larger exponents before certificate-path or TLS-signature
+verification. Generation checks this limit as soon as it receives the TLS
+Certificate message, before waiting for CertificateVerify. This changes
+certificate acceptance, not the proof format or immutable root bundle; use
+an updated Core node with the same rule.
+
 ## Current commands
 
 ```text

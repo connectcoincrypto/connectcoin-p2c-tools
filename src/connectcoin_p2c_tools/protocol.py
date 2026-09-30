@@ -319,6 +319,15 @@ def _parse_certificate(body: bytes) -> tuple[bytes, ...]:
     return tuple(result)
 
 
+def parse_certificate_message(message: bytes) -> tuple[bytes, ...]:
+    """Parse one bounded TLS Certificate before waiting for CertificateVerify."""
+    reader = _Reader(message)
+    _, body = _read_handshake(reader, CERTIFICATE, MAX_CERTIFICATE_MESSAGE_SIZE, "Certificate")
+    if not reader.empty:
+        raise ProofFormatError("trailing bytes after P2C Certificate")
+    return _parse_certificate(body)
+
+
 def _parse_certificate_verify(body: bytes, client: _ClientState) -> tuple[int, bytes]:
     reader = _Reader(body)
     scheme = reader.u16("CertificateVerify signature scheme")

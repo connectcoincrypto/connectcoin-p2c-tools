@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import warnings
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,11 +24,13 @@ from .protocol import (
     RSA_PSS_PSS_SHA256,
     RSA_PSS_RSAE_SHA256,
     ParsedProof,
+    parse_certificate_message,
     parse_proof,
 )
 from .signatures import signature_scheme_allowed
 
 ROOTS_V1_SHA256 = "f66dff1bdf8f96060b8177976f8b7d9254bc89bc4db933d769f7384d28480bc9"
+MAX_RSA_PUBLIC_EXPONENT_BITS = 64
 OID_RSA_ENCRYPTION = ObjectIdentifier("1.2.840.113549.1.1.1")
 OID_RSASSA_PSS = ObjectIdentifier("1.2.840.113549.1.1.10")
 TLS13_SERVER_CERTIFICATE_VERIFY_CONTEXT = b"TLS 1.3, server CertificateVerify"
@@ -46,16 +49,49 @@ class VerificationResult:
     signature_algorithms_mask: int
 
 
-def _load_certificates(parsed: ParsedProof) -> list[x509.Certificate]:
+def _check_rsa_public_exponents(certificates: Iterable[x509.Certificate]) -> None:
+    """Apply Core's bound to every RSA/RSA-PSS certificate, not just its leaf.
+
+    Checking the integer is cheap and precedes path/signature verification.
+    There is no small-modulus exemption; a DER sign-padding byte is not a bit
+    of the mathematical exponent. PSS keys retain their original restrictions.
+    """
+    for certificate in certificates:
+        if certificate.public_key_algorithm_oid not in {OID_RSA_ENCRYPTION, OID_RSASSA_PSS}:
+            continue
+        try:
+            public_key = certificate.public_key()
+            if not isinstance(public_key, rsa.RSAPublicKey):
+                raise ValueError("RSA certificate did not contain an RSA public key")
+            exponent = public_key.public_numbers().e
+        except (UnsupportedAlgorithm, ValueError) as exc:
+            raise ProofVerificationError(
+                "invalid or unsupported certificate RSA public key"
+            ) from exc
+        if exponent.bit_length() > MAX_RSA_PUBLIC_EXPONENT_BITS:
+            raise ProofVerificationError("P2C certificate RSA public exponent exceeds 64 bits")
+
+
+def _load_certificate_chain(encoded_chain: tuple[bytes, ...]) -> list[x509.Certificate]:
     certificates: list[x509.Certificate] = []
-    for position, encoded in enumerate(parsed.certificate_chain):
+    for position, encoded in enumerate(encoded_chain):
         try:
             certificates.append(x509.load_der_x509_certificate(encoded))
         except ValueError as exc:
             raise ProofVerificationError(
                 f"certificate {position} is not a valid DER X.509 certificate"
             ) from exc
+    _check_rsa_public_exponents(certificates)
     return certificates
+
+
+def _load_certificates(parsed: ParsedProof) -> list[x509.Certificate]:
+    return _load_certificate_chain(parsed.certificate_chain)
+
+
+def validate_certificate_message(message: bytes) -> None:
+    """Preflight captured certificates; this does not authenticate their path."""
+    _load_certificate_chain(parse_certificate_message(message))
 
 
 def _load_roots(path: str | Path, version: int, enforce_root_pin: bool) -> list[x509.Certificate]:
@@ -80,6 +116,7 @@ def _load_roots(path: str | Path, version: int, enforce_root_pin: bool) -> list[
         raise ProofVerificationError("trusted root bundle is not valid PEM") from exc
     if not roots:
         raise ProofVerificationError("trusted root bundle contains no certificates")
+    _check_rsa_public_exponents(roots)
     return roots
 
 
@@ -263,6 +300,7 @@ def _check_pss_key_restrictions(leaf: x509.Certificate) -> None:
 
 
 def _verify_certificate_signature(leaf: x509.Certificate, parsed: ParsedProof) -> None:
+    _check_rsa_public_exponents((leaf,))
     message = _certificate_verify_message(parsed.transcript_hash)
     scheme = parsed.certificate_verify_scheme
     try:

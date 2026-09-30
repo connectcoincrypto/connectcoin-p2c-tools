@@ -32,6 +32,7 @@ from .signatures import (
     signature_scheme_allowed,
     validate_signature_algorithms_mask,
 )
+from .verify import validate_certificate_message
 
 CONTENT_CHANGE_CIPHER_SPEC = 20
 CONTENT_ALERT = 21
@@ -451,6 +452,11 @@ def capture_tls13_proof(
                     raise TLSGenerationError(
                         f"expected TLS handshake type {expected_type}, received {message[0]}"
                     )
+                if expected_type == CERTIFICATE:
+                    try:
+                        validate_certificate_message(message)
+                    except P2CError as exc:
+                        raise TLSGenerationError(str(exc)) from exc
                 captured.append(message)
 
     result = TLSProofMessages(
